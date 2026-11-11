@@ -1,12 +1,16 @@
-/* VKTT GitHub auto-updater 1.1: only the trusted fixed repository. */
+/* VKTT GitHub auto-updater 1.3: fixed official repository. */
 ;(function(){
 'use strict';
 const ROOT='https://raw.githubusercontent.com/hienadonis-source/vktt-than-thuc-online/main/';
 const ID='vktt_than_thuc_online';
 const KEY='vktt:auto-update:last-check';
-const CURRENT='1.4.39';
+const CURRENT='1.4.42';
 const MAX=3*1024*1024;
 const INTERVAL=10*60*1000;
+let inProgress=null;
+let status='Chưa kiểm tra GitHub';
+let savedVersion=CURRENT;
+let remoteVersion='—';
 function newer(a,b){
  const x=String(a).split('.').map(Number),y=String(b).split('.').map(Number);
  if(x.some(v=>!Number.isSafeInteger(v))||y.some(v=>!Number.isSafeInteger(v)))return false;
@@ -14,70 +18,108 @@ function newer(a,b){
  return false;
 }
 function parseYaml(s){
- const id=s.match(/^id:\s*(\S+)/m)?.[1];
- const version=s.match(/^version:\s*['"]?([0-9]+(?:\.[0-9]+){0,3})/m)?.[1];
- const script=s.match(/^script:\s*(\S+)/m)?.[1];
- return {id,version,script};
+ return {id:s.match(/^id:\s*(\S+)/m)?.[1],version:s.match(/^version:\s*['"]?([0-9]+(?:\.[0-9]+){0,3})/m)?.[1],script:s.match(/^script:\s*(\S+)/m)?.[1]};
 }
 async function fetchText(path){
  const r=await fetch(ROOT+path+'?v='+Date.now(),{cache:'no-store'});
  if(!r.ok)throw Error(path+': HTTP '+r.status);
- const size=Number(r.headers.get('content-length')||0);
- if(size>MAX)throw Error(path+' too large');
- const s=await r.text();
- if(s.length>MAX)throw Error(path+' too large');
- return s;
+ if(Number(r.headers.get('content-length')||0)>MAX)throw Error(path+' quá lớn');
+ const data=await r.text();
+ if(data.length>MAX)throw Error(path+' quá lớn');
+ return data;
 }
 function openDb(){return new Promise((ok,no)=>{
  const q=indexedDB.open('tu-tien-mods',3);
- q.onsuccess=()=>ok(q.result);
- q.onerror=()=>no(q.error);
- q.onupgradeneeded=()=>{
-  for(const [name,key] of [['mods','id'],['snapshots','at'],['handles','key']])
-   if(!q.result.objectStoreNames.contains(name))q.result.createObjectStore(name,{keyPath:key});
- };
+ q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error);
+ q.onupgradeneeded=()=>{for(const [name,key] of [['mods','id'],['snapshots','at'],['handles','key']])if(!q.result.objectStoreNames.contains(name))q.result.createObjectStore(name,{keyPath:key});};
 });}
 function request(q){return new Promise((ok,no)=>{q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error);});}
 function txDone(tx){return new Promise((ok,no)=>{tx.oncomplete=()=>ok();tx.onerror=()=>no(tx.error);tx.onabort=()=>no(tx.error);});}
-async function run(){
- try{
-  if(location.protocol!=='https:'||!window.indexedDB||!window.fetch)return;
-  const last=Number(localStorage.getItem(KEY)||0);
-  if(Date.now()-last<INTERVAL)return;
-  // Read the installed mod before asking GitHub. Do not overwrite file-installed mods.
-  const db=await openDb();let old;
-  try{const tx=db.transaction('mods','readonly');old=await request(tx.objectStore('mods').get(ID));}finally{db.close();}
-  if(!old||old.source!=='url')return;
-  const yaml=await fetchText('mod.yaml'),meta=parseYaml(yaml);
-  if(meta.id!==ID||meta.script!=='main.js'||!meta.version)throw Error('Invalid manifest');
-  if(!newer(meta.version,old.version)){
-   localStorage.setItem(KEY,String(Date.now()));return;
-  }
-  const js=await fetchText('main.js');
-  if(!js.includes('VKTT GitHub auto-updater 1.1'))throw Error('Updater missing in new release');
-  if(!js.includes("const CURRENT='"+meta.version+"'"))throw Error('Version mismatch');
-  // Fail closed if browser blocks syntax validation; never install unchecked code.
-  try{new Function(js);}catch(e){throw Error('JS syntax validation failed: '+e.message);}
-  // Prevent mixed-version fetches if GitHub was being updated during this request.
-  const meta2=parseYaml(await fetchText('mod.yaml'));
-  if(meta2.id!==ID||meta2.version!==meta.version||meta2.script!=='main.js')throw Error('Manifest changed while downloading');
-  const db2=await openDb();
+function setStatus(s){status=s;renderStatus();}
+async function check(force=false){
+ if(inProgress)return inProgress;
+ inProgress=(async()=>{
   try{
-   const tx=db2.transaction('mods','readwrite'),store=tx.objectStore('mods');
-   const complete=txDone(tx);
-   const current=await request(store.get(ID));
-   if(current&&current.source==='url'&&newer(meta.version,current.version)){
-    const enc=new TextEncoder();
-    const files={...current.files,'main.js':enc.encode(js).buffer,'mod.yaml':enc.encode(yaml).buffer};
-    store.put({...current,files,version:meta.version,updatedAt:Date.now()});
+   if(location.protocol!=='https:'||!window.indexedDB||!window.fetch)throw Error('Trình duyệt không hỗ trợ cập nhật');
+   const db=await openDb();let old;
+   try{const tx=db.transaction('mods','readonly');old=await request(tx.objectStore('mods').get(ID));}finally{db.close();}
+   if(!old)throw Error('Không tìm thấy mod đã cài');
+   savedVersion=old.version||CURRENT;
+   renderStatus();
+   if(!force&&Date.now()-Number(localStorage.getItem(KEY)||0)<INTERVAL){setStatus('Đã kiểm tra gần đây');return;}
+   setStatus('Đang kiểm tra GitHub…');
+   const yaml=await fetchText('mod.yaml'), meta=parseYaml(yaml);
+   if(meta.id!==ID||meta.script!=='main.js'||!meta.version)throw Error('mod.yaml không hợp lệ');
+   remoteVersion=meta.version;
+   if(!newer(meta.version,old.version)){
+    localStorage.setItem(KEY,String(Date.now()));setStatus('Đã là bản mới nhất');return;
    }
-   await complete;
-  }finally{db2.close();}
-  localStorage.setItem(KEY,String(Date.now()));
-  console.info('[Thần Thức] Đã kiểm tra GitHub; bản '+meta.version+' sẽ có hiệu lực sau khi mở lại game nếu đã được cập nhật.');
- }catch(e){console.warn('[Thần Thức] Không thể tự cập nhật, giữ bản hiện tại:',e.message);}
+   setStatus('Đang tải bản '+meta.version+'…');
+   const js=await fetchText('main.js');
+   if(!js.includes('VKTT GitHub auto-updater 1.3') && !js.includes('VKTT GitHub auto-updater 1.2'))throw Error('Phiên bản mới thiếu bộ cập nhật');
+   if(!js.includes("const CURRENT='"+meta.version+"'"))throw Error('Phiên bản main.js và mod.yaml không khớp');
+   try{new Function(js);}catch(e){throw Error('JavaScript không hợp lệ: '+e.message);}
+   const again=parseYaml(await fetchText('mod.yaml'));
+   if(again.id!==ID||again.script!=='main.js'||again.version!==meta.version)throw Error('GitHub thay đổi trong lúc tải');
+   const db2=await openDb();let saved=false;
+   try{
+    const tx=db2.transaction('mods','readwrite'),store=tx.objectStore('mods');
+    const done=txDone(tx);const current=await request(store.get(ID));
+    if(current&&newer(meta.version,current.version)){
+     const enc=new TextEncoder();
+     const files={...(current.files||{}),'main.js':enc.encode(js).buffer,'mod.yaml':enc.encode(yaml).buffer};
+     store.put({...current,files,version:meta.version,updatedAt:Date.now()});saved=true;
+    }
+    await done;
+   }finally{db2.close();}
+   localStorage.setItem(KEY,String(Date.now()));
+   if(saved){savedVersion=meta.version;setStatus('Đã lưu '+meta.version+' — mở lại game để áp dụng');}
+   else setStatus('Đã là bản mới nhất');
+  }catch(e){setStatus('Lỗi: '+(e&&e.message||String(e)));console.warn('[Thần Thức] Kiểm tra cập nhật:',e);}
+ })().finally(()=>{inProgress=null;renderStatus();});
+ return inProgress;
 }
-setTimeout(run,3500);
+const UI_ID='vktt-update-inline';
+function findCard(){
+ // Only attach inside the existing Mods panel, next to this specific mod's entry.
+ const els=document.querySelectorAll('div,span,strong,b,h3,h4');
+ for(const el of els){
+  if(el.children.length>2||!el.textContent||!el.textContent.trim().startsWith('Thần Thức Online'))continue;
+  if(el.textContent.length>130)continue;
+  let p=el;
+  for(let i=0;i<7&&p;i++,p=p.parentElement){
+   const text=p.textContent||'';
+   if(text.length<6500&&text.includes('Mở Thần Thức Online')&&(text.includes('Cài từ tệp')||text.includes('Cài từ link')))return p;
+  }
+ }
+ return null;
+}
+function renderStatus(){
+ const el=document.getElementById(UI_ID);
+ if(!el)return;
+ const info=el.querySelector('[data-vktt-status]');
+ if(info)info.textContent='Phiên bản đang chạy: '+CURRENT+' · Đã lưu: '+savedVersion+' · GitHub: '+remoteVersion+' · '+status;
+ const btn=el.querySelector('button');if(btn)btn.disabled=!!inProgress;
+}
+function mount(){
+ if(document.getElementById(UI_ID))return;
+ const card=findCard();if(!card)return;
+ const wrap=document.createElement('div');wrap.id=UI_ID;
+ wrap.style.cssText='margin:10px 0 4px;padding:9px 10px;border:1px solid #b8a17a;background:rgba(255,250,232,.75);color:#5b302a;font-size:13px;line-height:1.55;max-width:100%;box-sizing:border-box;overflow-wrap:anywhere';
+ const info=document.createElement('div');info.dataset.vkttStatus='1';
+ const btn=document.createElement('button');btn.type='button';btn.textContent='Kiểm tra cập nhật';
+ btn.style.cssText='margin-top:7px;padding:5px 10px;border:1px solid #8b6554;background:#f5e8cd;color:#852421;font:inherit;cursor:pointer';
+ btn.addEventListener('click',()=>{void check(true);});
+ wrap.append(info,btn);card.appendChild(wrap);renderStatus();
+}
+function startUI(){
+ if(!document.body)return;
+ let pending=false;
+ const obs=new MutationObserver(()=>{if(pending)return;pending=true;setTimeout(()=>{pending=false;mount();},120);});
+ obs.observe(document.body,{childList:true,subtree:true});mount();
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',startUI,{once:true});else startUI();
+setTimeout(()=>{void check(false);},3500);
 })();
 
 
