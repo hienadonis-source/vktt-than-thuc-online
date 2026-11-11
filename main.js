@@ -4,7 +4,7 @@
 const ROOT='https://raw.githubusercontent.com/hienadonis-source/vktt-than-thuc-online/main/';
 const ID='vktt_than_thuc_online';
 const KEY='vktt:auto-update:last-check';
-const CURRENT='1.4.54';
+const CURRENT='1.4.55';
 const MAX=3*1024*1024;
 const INTERVAL=10*60*1000;
 let inProgress=null;
@@ -147,7 +147,7 @@ async function vkttDuelServerProof() {
   const payload={version:1,contentHash:String(_0xDd2e(_0xDd28.env.content)),
     character:structuredClone(character),difficulty:run.difficulty??'normal'};
   const serialized=JSON.stringify(payload);
-  if(new TextEncoder().encode(serialized).length>48000)return {ok:false,message:'Nhân vật quá lớn để gửi xác thực Tỉ thí.'};
+  if(new TextEncoder().encode(serialized).length>262144)return {ok:false,message:'Dữ liệu nhân vật vượt 256 KiB; cần kiểm tra bản lưu.'};
   const socketId=_0xDd75?.id;
   if(vkttDuelProofCache?.socketId===socketId && vkttDuelProofCache.serialized===serialized &&
       vkttDuelProofCache.expiresAt>Date.now()+1000)return vkttDuelProofCache;
