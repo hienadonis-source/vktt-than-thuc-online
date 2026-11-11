@@ -1,0 +1,11 @@
+id: vktt_than_thuc_online
+name: Thần Thức Online - Tổ Đội by DangHien
+version: 1.4.38
+api_version: 1
+description: >-
+  Thần Thức, Tổ đội, giao dịch, Ăn trộm, Đồ sát và Tỉ thí.
+  Truyền một tia Phân Hồn bảo vệ truyền nhân trong 100 năm, tiêu hao 200 năm thọ nguyên.
+  Phân Hồn có 20% sức mạnh người gửi, không pet, chỉ bảo vệ trong PvE gốc.
+  Phòng đấu kéo dài tối đa 1 giờ, không còn giới hạn 30 hiệp hoặc thời gian chờ lượt.
+  Cập nhật phiên bản mới nhất để sử dụng các chức năng online.
+script: main.js
